@@ -1,16 +1,19 @@
 /*
 
   emonTxV3.4 Discrete Sampling
+  w/ Direct Ethernet (EtherCard) connection, sending continuous metrics to InfluxDB
+  =================================================================================
 
   If AC-AC adapter is detected assume emonTx is also powered from adapter (jumper shorted) and take Real Power Readings and disable sleep mode to keep load on power supply constant
   If AC-AC addapter is not detected assume powering from battereis / USB 5V AC sample is not present so take Apparent Power Readings and enable sleep mode
 
-  Transmitt values via RFM69CW radio
+  Could transmit values via RFM69CW radio if you have enough ROM space
 
    -----------------------------------------
   Part of the openenergymonitor.org project
 
-  Authors: Glyn Hudson & Trystan Lea
+  Authors: * Original by Glyn Hudson & Trystan Lea
+           * Ethernet+InfluxDB by Michel Belleau
   Builds upon JCW JeeLabs RF12 library and Arduino
 
   Licence: GNU GPL V3
@@ -31,6 +34,7 @@
 
 
 Change Log:
+V4.0   16/05/19 Add Ethernet Direct
 V3.1   25/05/18 Add prompt for serial config
 V3.0   16/01/18 Return zero reading when CT is disconnected and always sample from all CT's when powered by AC-AC (negate CT's required plugged in before startup)
 v2.9   30/03/17 Correct RMS voltage calc at startup when USA mode is enabled
@@ -81,7 +85,7 @@ EnergyMonitor ct1, ct2, ct3, ct4;
 #include <DallasTemperature.h>                                        //http://download.milesburton.com/Arduino/MaximTemperature/DallasTemperature_LATEST.zip
 
 
-const byte version = 31;         // firmware version divide by 10 to get version number e,g 16 = v1.6
+const byte version = 40;         // firmware version divide by 10 to get version number e,g 16 = v1.6
 boolean DEBUG = 1;                       // Print serial debug
 
 //----------------------------emonTx V3 Settings---------------------------------------------------------------------------------------------------------------
@@ -137,7 +141,9 @@ byte numSensors;
 byte RF_freq=RF12_433MHZ;                                           // Frequency of RF69CW module can be RF12_433MHZ, RF12_868MHZ or RF12_915MHZ. You should use the one matching the module you have.
 byte nodeID = 8;                                                    // emonTx RFM12B node ID
 int networkGroup = 210;
-boolean RF_STATUS = 1;                                              // Enable RF
+
+#define RF_STATUS 0                                                // Enable RF
+#define ETH_STATUS 1                                               // Enable ETHERNET
 
 // Note: Please update emonhub configuration guide on OEM wide packet structure change:
 // https://github.com/openenergymonitor/emonhub/blob/emon-pi/configuration.md
@@ -194,22 +200,32 @@ void setup()
   Serial.print("emonTx V3.4 Discrete Sampling V"); Serial.println(version*0.1);
   Serial.println("OpenEnergyMonitor.org");
   Serial.println(" ");
-  if (RF_STATUS==1){
-    load_config();                                                        // Load RF config from EEPROM (if any exists)
-    #if (RF69_COMPAT)
-       Serial.print("RFM69CW");
-    #else
-      Serial.print("RFM12B");
-    #endif
-    if (digitalRead(DIP_switch1)==LOW) nodeID--;                            // IF DIP switch 1 is switched on then subtract 1 from nodeID
-    Serial.print(" Node: "); Serial.print(nodeID);
-    Serial.print(" Freq: ");
-    if (RF_freq == RF12_433MHZ) Serial.print("433Mhz");
-    if (RF_freq == RF12_868MHZ) Serial.print("868Mhz");
-    if (RF_freq == RF12_915MHZ) Serial.print("915Mhz");
-    Serial.print(" Group: "); Serial.println(networkGroup);
-    Serial.println(" ");
-  }
+
+  #if (RF_STATUS==1)
+  Serial.print("RF Sending: Enabled");
+
+  load_config();                                                        // Load RF config from EEPROM (if any exists)
+  #if (RF69_COMPAT)
+     Serial.print("RFM69CW");
+  #else
+    Serial.print("RFM12B");
+  #endif
+  if (digitalRead(DIP_switch1)==LOW) nodeID--;                            // IF DIP switch 1 is switched on then subtract 1 from nodeID
+  Serial.print(" Node: "); Serial.print(nodeID);
+  Serial.print(" Freq: ");
+  if (RF_freq == RF12_433MHZ) Serial.print("433Mhz");
+  if (RF_freq == RF12_868MHZ) Serial.print("868Mhz");
+  if (RF_freq == RF12_915MHZ) Serial.print("915Mhz");
+  Serial.print(" Group: "); Serial.println(networkGroup);
+  Serial.println(" ");
+  #endif
+
+  #if (ETH_STATUS==1)
+  Serial.print("ETHERNET Sending: Enabled");
+
+  Serial.println(" ");
+  #endif
+  
   Serial.println("POST.....wait 10s");
   Serial.println("'+++' then [Enter] for RF config mode");
   Serial.println("(Arduino IDE Serial Monitor: make sure 'Both NL & CR' is selected)");
@@ -226,17 +242,17 @@ void setup()
 
   delay(10);
 
-  if (RF_STATUS==1){
-    rf12_initialize(nodeID, RF_freq, networkGroup);                         // initialize RFM12B/rfm69CW
-    for (int i=10; i>=0; i--)                                               // Send RF test sequence (for factory testing)
-    {
-      emontx.power1=i;
-      rf12_sendNow(0, &emontx, sizeof emontx);
-      delay(100);
-    }
-    rf12_sendWait(2);
-    emontx.power1=0;
+  #if (RF_STATUS==1)
+  rf12_initialize(nodeID, RF_freq, networkGroup);                         // initialize RFM12B/rfm69CW
+  for (int i=10; i>=0; i--)                                               // Send RF test sequence (for factory testing)
+  {
+    emontx.power1=i;
+    rf12_sendNow(0, &emontx, sizeof emontx);
+    delay(100);
   }
+  rf12_sendWait(2);
+  emontx.power1=0;
+  #endif
 
   if (analogRead(1) > 0) {CT1 = 1; CT_count++;} else CT1=0;              // check to see if CT is connected to CT1 input, if so enable that channel
   if (analogRead(2) > 0) {CT2 = 1; CT_count++;} else CT2=0;              // check to see if CT is connected to CT2 input, if so enable that channel
@@ -487,9 +503,9 @@ void loop()
 
   if (ACAC) {digitalWrite(LEDpin, HIGH); delay(200); digitalWrite(LEDpin, LOW);}    // flash LED if powered by AC
 
-  if (RF_STATUS==1){
-    send_rf_data();                                                           // *SEND RF DATA* - see emontx_lib
-  }
+  #if (RF_STATUS==1)
+  send_rf_data();                                                           // *SEND RF DATA* - see emontx_lib
+  #endif
 
   unsigned long runtime = millis() - start;
   unsigned long sleeptime = (TIME_BETWEEN_READINGS*1000) - runtime - 100;

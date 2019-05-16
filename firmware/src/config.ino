@@ -73,19 +73,19 @@ static void config (char c) {
       } //end case
 
     //Print Current RF config
-    if (RF_STATUS==1) {
-      Serial.print(F(" "));
-      // Serial.print((char) ('@' + (nodeID & RF12_HDR_MASK)));
-      Serial.print(F(" i"));
-      Serial.print(nodeID & RF12_HDR_MASK);
-      Serial.print(F(" g"));
-      Serial.print(networkGroup);
-      Serial.print(F(" @ "));
-      Serial.print(RF_freq == RF12_433MHZ ? 433 :
-                   RF_freq == RF12_868MHZ ? 868 :
-                   RF_freq == RF12_915MHZ ? 915 : 0);
-      Serial.print(F(" MHz"));
-    }
+    #if (RF_STATUS==1)
+    Serial.print(F(" "));
+    // Serial.print((char) ('@' + (nodeID & RF12_HDR_MASK)));
+    Serial.print(F(" i"));
+    Serial.print(nodeID & RF12_HDR_MASK);
+    Serial.print(F(" g"));
+    Serial.print(networkGroup);
+    Serial.print(F(" @ "));
+    Serial.print(RF_freq == RF12_433MHZ ? 433 :
+                 RF_freq == RF12_868MHZ ? 868 :
+                 RF_freq == RF12_915MHZ ? 915 : 0);
+    Serial.print(F(" MHz"));
+    #endif
     
     Serial.print(F(" USA ")); Serial.print(USA);
     Serial.println(F(" "));
