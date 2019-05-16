@@ -75,11 +75,27 @@ See: https://github.com/openenergymonitor/emonhub/blob/emon-pi/configuration.md
 
 #define emonTxV3                                                                          // Tell emonLib this is the emonTx V3 - don't read Vcc assume Vcc = 3.3V as is always the case on emonTx V3 eliminates bandgap error and need for calibration http://harizanov.com/2013/09/thoughts-on-avr-adc-accuracy/
 #define RF69_COMPAT 1                                                              // Set to 1 if using RFM69CW or 0 if using RFM12B
+
+#define RF_STATUS 0                                                // Enable RF
+#define ETH_STATUS 1                                               // Enable ETHERNET
+
+#if (RF_STATUS==1)
 #include <JeeLib.h>                                                                      //https://github.com/jcw/jeelib - Tested with JeeLib 3/11/14
 ISR(WDT_vect) { Sleepy::watchdogEvent(); }                            // Attached JeeLib sleep function to Atmega328 watchdog -enables MCU to be put into sleep mode inbetween readings to reduce power consumption
+#endif
 
 #include "EmonLib.h"                                                                    // Include EmonLib energy monitoring library https://github.com/openenergymonitor/EmonLib
 EnergyMonitor ct1, ct2, ct3, ct4;
+
+#include <EtherCard.h>  // https://github.com/njh/EtherCard
+// Ethernet mac address - must be unique on your network
+const static byte mymac[] PROGMEM = { 0x74,0x69,0x69,0x2D,0x30,0x31 };
+const char INFLUX_REMOTEHOST[] PROGMEM = "influxdb-server.local";  // InfluxDB server name
+const unsigned int INFLUX_REMOTEPORT = 8888;             // InfluxDB requests are to port 123
+const unsigned int INFLUX_LOCALPORT = 8888;             // Local UDP port to use
+#define ETH_SS_PIN 3
+
+byte Ethernet::buffer[350];                          // Buffer must be 350 for DHCP to work
 
 #include <OneWire.h>                                                  //http://www.pjrc.com/teensy/td_libs_OneWire.html
 #include <DallasTemperature.h>                                        //http://download.milesburton.com/Arduino/MaximTemperature/DallasTemperature_LATEST.zip
@@ -95,38 +111,38 @@ const byte TIME_BETWEEN_READINGS = 10;            //Time between readings
 
 //http://openenergymonitor.org/emon/buildingblocks/calibration
 
-const float Ical1=                90.9;                                 // (2000 turns / 22 Ohm burden) = 90.9
-const float Ical2=                90.9;                                 // (2000 turns / 22 Ohm burden) = 90.9
-const float Ical3=                90.9;                                 // (2000 turns / 22 Ohm burden) = 90.9
-const float Ical4=                16.67;                               // (2000 turns / 120 Ohm burden) = 16.67
+const float Ical1 =                90.9;                                 // (2000 turns / 22 Ohm burden) = 90.9
+const float Ical2 =                90.9;                                 // (2000 turns / 22 Ohm burden) = 90.9
+const float Ical3 =                90.9;                                 // (2000 turns / 22 Ohm burden) = 90.9
+const float Ical4 =                16.67;                               // (2000 turns / 120 Ohm burden) = 16.67
 
 float Vcal=                       268.97;                             // (230V x 13) / (9V x 1.2) = 276.9 Calibration for UK AC-AC adapter 77DB-06-09
 //float Vcal=276.9;
 //const float Vcal=               260;                             //  Calibration for EU AC-AC adapter 77DE-06-09
-const float Vcal_USA=             130.0;                             //Calibration for US AC-AC adapter 77DA-10-09
+const float Vcal_USA =             130.0;                             //Calibration for US AC-AC adapter 77DA-10-09
 boolean USA=false;
 
-const float phase_shift=          1.7;
-const int no_of_samples=          1662;
-const int no_of_half_wavelengths= 30;
-const int timeout=                2000;                               //emonLib timeout
-const int ACAC_DETECTION_LEVEL=   3000;
-const byte min_pulsewidth= 110;                                // minimum width of interrupt pulse (default pulse output meters = 100ms)
-const int TEMPERATURE_PRECISION=  11;                          //9 (93.8ms),10 (187.5ms) ,11 (375ms) or 12 (750ms) bits equal to resplution of 0.5C, 0.25C, 0.125C and 0.0625C
-const byte MaxOnewire=             6;
+const float phase_shift =          1.7;
+const int no_of_samples =          1662;
+const int no_of_half_wavelengths = 30;
+const int timeout =                2000;                               //emonLib timeout
+const int ACAC_DETECTION_LEVEL =   3000;
+const byte min_pulsewidth = 110;                                // minimum width of interrupt pulse (default pulse output meters = 100ms)
+const int TEMPERATURE_PRECISION =  11;                          //9 (93.8ms),10 (187.5ms) ,11 (375ms) or 12 (750ms) bits equal to resplution of 0.5C, 0.25C, 0.125C and 0.0625C
+const byte MaxOnewire =             6;
 #define ASYNC_DELAY 375                                          // DS18B20 conversion delay - 9bit requres 95ms, 10bit 187ms, 11bit 375ms and 12bit resolution takes 750ms
 //-------------------------------------------------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------------------------------------------------
 
 
 //----------------------------emonTx V3 hard-wired connections---------------------------------------------------------------------------------------------------------------
-const byte LEDpin=                 6;                              // emonTx V3 LED
-const byte DS18B20_PWR=            19;                             // DS18B20 Power
-const byte DIP_switch1=            8;                              // RF node ID (default no chance in node ID, switch on for nodeID -1) switch off D9 is HIGH from internal pullup
-const byte DIP_switch2=            9;                              // Voltage selection 230 / 110 V AC (default switch off 230V)  - switch off D8 is HIGH from internal pullup
-const byte battery_voltage_pin=    7;                              // Battery Voltage sample from 3 x AA
-const byte pulse_countINT=         1;                              // INT 1 / Dig 3 Terminal Block / RJ45 Pulse counting pin(emonTx V3.4) - (INT0 / Dig2 emonTx V3.2)
-const byte pulse_count_pin=        3;                              // INT 1 / Dig 3 Terminal Block / RJ45 Pulse counting pin(emonTx V3.4) - (INT0 / Dig2 emonTx V3.2)
+const byte LEDpin =                 6;                              // emonTx V3 LED
+const byte DS18B20_PWR =            19;                             // DS18B20 Power
+const byte DIP_switch1 =            8;                              // RF node ID (default no chance in node ID, switch on for nodeID -1) switch off D9 is HIGH from internal pullup
+const byte DIP_switch2 =            9;                              // Voltage selection 230 / 110 V AC (default switch off 230V)  - switch off D8 is HIGH from internal pullup
+const byte battery_voltage_pin =    7;                              // Battery Voltage sample from 3 x AA
+const byte pulse_countINT =         1;                              // INT 1 / Dig 3 Terminal Block / RJ45 Pulse counting pin(emonTx V3.4) - (INT0 / Dig2 emonTx V3.2)
+const byte pulse_count_pin =        3;                              // INT 1 / Dig 3 Terminal Block / RJ45 Pulse counting pin(emonTx V3.4) - (INT0 / Dig2 emonTx V3.2)
 #define ONE_WIRE_BUS               5                               // DS18B20 Data
 //-------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -137,13 +153,15 @@ byte allAddress [MaxOnewire][8];  // 8 bytes per address
 byte numSensors;
 //-------------------------------------------------------------------------------------------------------------------------------------------
 
+#if (RF_STATUS==1)
 //-----------------------RFM12B / RFM69CW SETTINGS----------------------------------------------------------------------------------------------------
 byte RF_freq=RF12_433MHZ;                                           // Frequency of RF69CW module can be RF12_433MHZ, RF12_868MHZ or RF12_915MHZ. You should use the one matching the module you have.
+#else
+byte RF_freq=0;
+#endif
+
 byte nodeID = 8;                                                    // emonTx RFM12B node ID
 int networkGroup = 210;
-
-#define RF_STATUS 0                                                // Enable RF
-#define ETH_STATUS 1                                               // Enable ETHERNET
 
 // Note: Please update emonhub configuration guide on OEM wide packet structure change:
 // https://github.com/openenergymonitor/emonhub/blob/emon-pi/configuration.md
@@ -197,8 +215,12 @@ void setup()
   pinMode(DIP_switch2, INPUT_PULLUP);
 
   Serial.begin(115200);
-  Serial.print("emonTx V3.4 Discrete Sampling V"); Serial.println(version*0.1);
-  Serial.println("OpenEnergyMonitor.org");
+//  while (!Serial) {
+//    ; // wait for serial port to connect. Needed for native USB port only
+//  }
+
+  Serial.print(F("emonTx V3.4 Discrete Sampling V")); Serial.println(version*0.1);
+  Serial.println(F("OpenEnergyMonitor.org"));
   Serial.println(" ");
 
   #if (RF_STATUS==1)
@@ -221,14 +243,30 @@ void setup()
   #endif
 
   #if (ETH_STATUS==1)
-  Serial.print("ETHERNET Sending: Enabled");
+  Serial.print(F("ETHERNET Sending: Enabled"));
 
+  // Change 'ETH_SS_PIN' to your Slave Select pin
+  if (ether.begin(sizeof Ethernet::buffer, mymac, ETH_SS_PIN) == 0)
+    Serial.println(F("Failed to access Ethernet controller"));
+
+  if (!ether.dhcpSetup())
+    Serial.println(F("ERROR: DHCP failed."));
+
+  //Serial.print("IP:  "); //Serial.println(ether.myip);
+  //ether.printIp("GW:  ", ether.gwip);
+  //ether.printIp("DNS: ", ether.dnsip);
+
+  if (!ether.dnsLookup(INFLUX_REMOTEHOST))
+    Serial.println(F("ERROR: DNS failed."));
+
+  //ether.copyIp(ntpIp, ether.hisip);
+  ether.printIp("INFLUXDB: ", ether.hisip);
   Serial.println(" ");
   #endif
   
-  Serial.println("POST.....wait 10s");
-  Serial.println("'+++' then [Enter] for RF config mode");
-  Serial.println("(Arduino IDE Serial Monitor: make sure 'Both NL & CR' is selected)");
+  Serial.println(F("POST.....wait 10s"));
+  Serial.println(F("'+++' then [Enter] for RF config mode"));
+  Serial.println(F("(Arduino IDE Serial Monitor: make sure 'Both NL & CR' is selected)"));
 
 
 
@@ -268,7 +306,7 @@ void setup()
     // If serial input of keyword string '+++' is entered during 10s POST then enter config mode
     if (Serial.available()){
       if ( Serial.readString() == "+++\r\n"){
-        Serial.println("Entering config mode...");
+        Serial.println(F("Entering config mode..."));
         showString(helpText1);
         // char c[]="v"
         config(char('v'));
@@ -336,31 +374,31 @@ void setup()
     Serial.print(vrms,0); Serial.println("V");
 
     if (ACAC) {
-      Serial.println("AC-AC detected - Real Power measure enabled");
-      Serial.println("assuming pwr from AC-AC (jumper closed)");
+      Serial.println(F("AC-AC detected - Real Power measure enabled"));
+      Serial.println(F("assuming pwr from AC-AC (jumper closed)"));
       if (USA==true) Serial.println("USA mode active");
       Serial.print("Vcal: "); Serial.println(Vcal);
       Serial.print("Phase Shift: "); Serial.println(phase_shift);
     } else {
-      Serial.println("AC-AC NOT detected - Apparent Pwr measure enabled");
-      Serial.print("Assuming VRMS: "); Serial.print(Vrms); Serial.println("V");
-      Serial.println("Assuming power from batt / 5V USB - power save enabled");
+      Serial.println(F("AC-AC NOT detected - Apparent Pwr measure enabled"));
+      Serial.print(F("Assuming VRMS: ")); Serial.print(Vrms); Serial.println("V");
+      Serial.println(F("Assuming power from batt / 5V USB - power save enabled"));
     }
 
     if (CT_count==0) {
       Serial.println("NO CT's detected");
     } else {
-      if (CT1) Serial.println("CT 1 detected");
-      if (CT2) Serial.println("CT 2 detected");
-      if (CT3) Serial.println("CT 3 detected");
-      if (CT4) Serial.println("CT 4 detected");
+      if (CT1) Serial.println(F("CT 1 detected"));
+      if (CT2) Serial.println(F("CT 2 detected"));
+      if (CT3) Serial.println(F("CT 3 detected"));
+      if (CT4) Serial.println(F("CT 4 detected"));
     }
 
     if (DS18B20_STATUS==1) {
-      Serial.print("Detected Temp Sensors:  ");
+      Serial.print(F("Detected Temp Sensors:  "));
       Serial.println(numSensors);
     } else {
-      Serial.println("No temperature sensor");
+      Serial.println(F("No temperature sensor"));
     }
 
     Serial.print("CT1 CT2 CT3 CT4 VRMS/BATT PULSE");
@@ -466,11 +504,19 @@ void loop()
   if (DS18B20_STATUS==1)
   {
     digitalWrite(DS18B20_PWR, HIGH);
+#if (RF_STATUS==1)
     Sleepy::loseSomeTime(50);
+#else
+    delay(50);
+#endif
     for(int j=0;j<numSensors;j++)
       sensors.setResolution(allAddress[j], TEMPERATURE_PRECISION);                    // and set the A to D conversion resolution of each.
     sensors.requestTemperatures();
+#if (RF_STATUS==1)
     Sleepy::loseSomeTime(ASYNC_DELAY);                                                // Must wait for conversion, since we use ASYNC mode
+#else
+    delay(ASYNC_DELAY);
+#endif
     for(byte j=0;j<numSensors;j++)
       emontx.temp[j]=get_temperature(j);
     digitalWrite(DS18B20_PWR, LOW);
@@ -514,7 +560,11 @@ void loop()
     delay(sleeptime);
   } else {                                                                  // if powered by battery then sleep rather than delay and disable LED to reduce energy consumption
                                    // lose an additional 500ms here (measured timing)
+#if (RF_STATUS==1)
     Sleepy::loseSomeTime(sleeptime-500);                                    // sleep or delay in milliseconds
+#else
+    delay(sleeptime);
+#endif
   }
 } // end loop
 //-------------------------------------------------------------------------------------------------------------------------------------------
@@ -523,7 +573,7 @@ void loop()
 
 
 
-
+#if (RF_STATUS==1)
 //-------------------------------------------------------------------------------------------------------------------------------------------
 //-------------------------------------------------------------------------------------------------------------------------------------------
 // SEND RF
@@ -535,7 +585,7 @@ void send_rf_data()
   rf12_sendWait(2);
   if (!ACAC) rf12_sleep(RF12_SLEEP);                             //if powered by battery then put the RF module to sleep between readings
 }
-
+#endif
 
 double calc_rms(int pin, int samples)
 {

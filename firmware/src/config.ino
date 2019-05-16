@@ -1,5 +1,3 @@
-
-
 #include <EEPROM.h>
 
 byte value;
@@ -108,9 +106,15 @@ static void save_config(){
   Serial.println("Done. New config saved to EEPROM");
 }
 
+#if (RF_STATUS==1)
 static byte bandToFreq (byte band) {
   return band == 4 ? RF12_433MHZ : band == 8 ? RF12_868MHZ : band == 9 ? RF12_915MHZ : 0;
 }
+#else
+static byte bandToFreq (byte band) {
+  return 0;
+}
+#endif
 
 static void showString (PGM_P s) {
   for (;;) {
