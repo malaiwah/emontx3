@@ -78,10 +78,16 @@ See: https://github.com/openenergymonitor/emonhub/blob/emon-pi/configuration.md
 
 #define RF_STATUS 0                                                // Enable RF
 #define ETH_STATUS 1                                               // Enable ETHERNET
+#define PULSE_COUNT 0
 
 #if (RF_STATUS==1)
 #include <JeeLib.h>                                                                      //https://github.com/jcw/jeelib - Tested with JeeLib 3/11/14
 ISR(WDT_vect) { Sleepy::watchdogEvent(); }                            // Attached JeeLib sleep function to Atmega328 watchdog -enables MCU to be put into sleep mode inbetween readings to reduce power consumption
+#endif
+
+#if (ETH_STATUS==1)
+const short MAX_LINE_BUFFER = 50;
+char lineBuffer[MAX_LINE_BUFFER];
 #endif
 
 #include "EmonLib.h"                                                                    // Include EmonLib energy monitoring library https://github.com/openenergymonitor/EmonLib
@@ -89,8 +95,8 @@ EnergyMonitor ct1, ct2, ct3, ct4;
 
 #include <EtherCard.h>  // https://github.com/njh/EtherCard
 // Ethernet mac address - must be unique on your network
-const static byte mymac[] PROGMEM = { 0x74,0x69,0x69,0x2D,0x30,0x31 };
-const char INFLUX_REMOTEHOST[] PROGMEM = "influxdb-server.local";  // InfluxDB server name
+static byte mymac[] = { 0x74,0x69,0x69,0x2D,0x30,0x31 };
+const char INFLUX_REMOTEHOST[] PROGMEM = "pico-master-01.picocloud.me";  // InfluxDB server name
 const unsigned int INFLUX_REMOTEPORT = 8888;             // InfluxDB requests are to port 123
 const unsigned int INFLUX_LOCALPORT = 8888;             // Local UDP port to use
 #define ETH_SS_PIN 3
@@ -107,7 +113,7 @@ boolean DEBUG = 1;                       // Print serial debug
 //----------------------------emonTx V3 Settings---------------------------------------------------------------------------------------------------------------
 byte Vrms=                        230;            // Vrms for apparent power readings (when no AC-AC voltage sample is present)
 const byte Vrms_USA=              120;            // VRMS for USA apparent power
-const byte TIME_BETWEEN_READINGS = 10;            //Time between readings
+const byte TIME_BETWEEN_READINGS = 1;            //Time between readings
 
 //http://openenergymonitor.org/emon/buildingblocks/calibration
 
@@ -205,7 +211,9 @@ void setup()
   pinMode(LEDpin, OUTPUT);
   pinMode(DS18B20_PWR, OUTPUT);
 
+  #if (PULSE_COUNT==1)
   pinMode(pulse_count_pin, INPUT_PULLUP);                     // Set emonTx V3.4 interrupt pulse counting pin as input (Dig 3 / INT1)
+  #endif
   emontx.pulseCount=0;                                        // Make sure pulse count starts at zero
 
   digitalWrite(LEDpin,HIGH);
@@ -223,10 +231,11 @@ void setup()
   Serial.println(F("OpenEnergyMonitor.org"));
   Serial.println(" ");
 
-  #if (RF_STATUS==1)
-  Serial.print("RF Sending: Enabled");
+  load_config();                                                        // Load config from EEPROM (if any exists)
 
-  load_config();                                                        // Load RF config from EEPROM (if any exists)
+  #if (RF_STATUS==1)
+  Serial.println(F("RF Sending: Enabled"));
+
   #if (RF69_COMPAT)
      Serial.print("RFM69CW");
   #else
@@ -243,7 +252,7 @@ void setup()
   #endif
 
   #if (ETH_STATUS==1)
-  Serial.print(F("ETHERNET Sending: Enabled"));
+  Serial.println(F("ETHERNET Sending: Enabled"));
 
   // Change 'ETH_SS_PIN' to your Slave Select pin
   if (ether.begin(sizeof Ethernet::buffer, mymac, ETH_SS_PIN) == 0)
@@ -265,13 +274,10 @@ void setup()
   #endif
   
   Serial.println(F("POST.....wait 10s"));
-  Serial.println(F("'+++' then [Enter] for RF config mode"));
+  Serial.println(F("'+++' then [Enter] for config mode"));
   Serial.println(F("(Arduino IDE Serial Monitor: make sure 'Both NL & CR' is selected)"));
 
-
-
   if (digitalRead(DIP_switch2)==LOW) USA=true;                            // IF DIP switch 2 is switched on then activate USA mode
-
 
   if (USA==true){                                                         // if USA mode is true
     Vcal=Vcal_USA;                                                        // Assume USA AC/AC adatper is being used, set calibration accordingly
@@ -426,7 +432,9 @@ void setup()
     ct4.voltage(0, Vcal, phase_shift);          // ADC pin, Calibration, phase_shift
   }
 
+  #if (PULSE_COUNT==1)
   attachInterrupt(pulse_countINT, onPulse, FALLING);     // Attach pulse counting interrupt pulse counting
+  #endif
 
   for(byte j=0;j<MaxOnewire;j++)
       emontx.temp[j] = 3000;                             // If no temp sensors connected default to status code 3000
@@ -441,6 +449,9 @@ void setup()
 void loop()
 {
   start = millis();
+
+  // this must be called for ethercard functions to work.
+  ether.packetLoop(ether.packetReceive());
 
   if (ACAC) {
     delay(200);                         //if powering from AC-AC adapter allow time for power supply to settle
@@ -553,6 +564,10 @@ void loop()
   send_rf_data();                                                           // *SEND RF DATA* - see emontx_lib
   #endif
 
+  #if (ETH_STATUS==1)
+  send_eth_data();                                                           // *SEND RF DATA* - see emontx_lib
+  #endif
+
   unsigned long runtime = millis() - start;
   unsigned long sleeptime = (TIME_BETWEEN_READINGS*1000) - runtime - 100;
 
@@ -584,6 +599,44 @@ void send_rf_data()
   rf12_sendNow(0, &emontx, sizeof emontx);                           //send temperature data via RFM12B using new rf12_sendNow wrapper
   rf12_sendWait(2);
   if (!ACAC) rf12_sleep(RF12_SLEEP);                             //if powered by battery then put the RF module to sleep between readings
+}
+#endif
+
+#if (ETH_STATUS==1)
+//-------------------------------------------------------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------------------------------------------------------
+// SEND ETHERNET
+//-------------------------------------------------------------------------------------------------------------------------------------------
+char* nodeName = "emontx-";
+void send_influxdb_line(char* nodeName, char* valueName, int v)
+{
+  strcpy(lineBuffer, "");
+  sprintf(lineBuffer, "emontx,node=%s%d %s=%d", nodeName, nodeID, valueName, v);
+  //String line = String("emontx,node="+ nodeName +" testval=" + v);
+  //ether.sendUdp(line.c_str(), line.length(), INFLUX_LOCALPORT, ether.hisip, INFLUX_REMOTEPORT );
+  ether.sendUdp(lineBuffer, strlen(lineBuffer), INFLUX_LOCALPORT, ether.hisip, INFLUX_REMOTEPORT );
+}
+
+void send_influxdb_labeled_line(char* nodeName, char* labelName, char* valueName, int v)
+{
+  strcpy(lineBuffer, "");
+  sprintf(lineBuffer, "emontx,node=%s%d,label=%s %s=%d", nodeName, nodeID, labelName, valueName, v);
+  //String line = String("emontx,node="+ nodeName +" testval=" + v);
+  //ether.sendUdp(line.c_str(), line.length(), INFLUX_LOCALPORT, ether.hisip, INFLUX_REMOTEPORT );
+  ether.sendUdp(lineBuffer, strlen(lineBuffer), INFLUX_LOCALPORT, ether.hisip, INFLUX_REMOTEPORT );
+}
+
+void send_eth_data()
+{
+      //char textToSend[] = "emontx,node=test testval=";
+      send_influxdb_labeled_line(nodeName, "ct1", "power", emontx.power1);
+      send_influxdb_labeled_line(nodeName, "ct2", "power", emontx.power2);
+      send_influxdb_labeled_line(nodeName, "ct3", "power", emontx.power3);
+      send_influxdb_labeled_line(nodeName, "ct4", "power", emontx.power4);
+      send_influxdb_line(nodeName, "vrms", emontx.Vrms);
+      send_influxdb_line(nodeName, "pulse", emontx.pulseCount);
+     //ether.sendUdp(line.c_str(), line.length(), INFLUX_LOCALPORT, ether.hisip, INFLUX_REMOTEPORT );
+  //if (!ACAC) rf12_sleep(RF12_SLEEP);                             //if powered by battery then put the RF module to sleep between readings
 }
 #endif
 

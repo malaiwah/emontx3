@@ -20,7 +20,7 @@ static void load_config(){
   }
   
   if (flag > 0){
-    Serial.println("Loaded EEPROM RF config >");
+    Serial.println("Loaded EEPROM config");
   }
   else {
     Serial.println("No EEPROM config");
@@ -83,11 +83,11 @@ static void config (char c) {
                  RF_freq == RF12_868MHZ ? 868 :
                  RF_freq == RF12_915MHZ ? 915 : 0);
     Serial.print(F(" MHz"));
-    #endif
     
     Serial.print(F(" USA ")); Serial.print(USA);
     Serial.println(F(" "));
-    
+    #endif
+
   } // end c > ' '
   value = 0;
 
